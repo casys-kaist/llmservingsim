@@ -377,6 +377,8 @@ guess.
 step, so P(accepted >= i) is the per-position curve. A measured curve is passed with
 `--spec-position-acceptance`; it must be nonincreasing and takes precedence
 over an aggregate rate, which in turn replaces the published curve.
+A speculative run ends each instance's results with its realized acceptance,
+in the counters vLLM reports.
 
 Model-owned MTP drafter passes are charged from catalog bindings and profile
 tables; missing required data is an error. Separate-model or n-gram drafting

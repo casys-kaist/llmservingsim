@@ -7,6 +7,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) co
 
 ### Added
 
+- End each instance's results with its realized speculative acceptance when
+  speculative decoding is configured: verification steps, drafted and accepted
+  tokens, and accepted counts per draft position. Other output is unchanged.
+  See [reading the output](https://llmservingsim.ai/docs/simulator/reading-output).
 - Accept a measured per-position acceptance curve for speculative decoding with
   `--spec-position-acceptance` or the per-instance `spec_position_acceptance`.
   The curve must be nonincreasing within [0, 1] and sets N when N is not

@@ -126,6 +126,15 @@ class Scheduler:
         # acceptance rate is accepted/drafted.
         self.spec_drafted = 0
         self.spec_accepted = 0
+        # Verification steps, and per draft position how many steps drafted it
+        # and how many accepted it -- the same counters as vLLM's
+        # ``SpecDecodingStats`` (``num_drafts``, ``num_draft_tokens_per_pos``,
+        # ``num_accepted_tokens_per_pos``), so a bench run and a simulation
+        # compare one for one. Reported only; nothing reads them back.
+        n_spec = acceptance_model.N if acceptance_model else 0
+        self.spec_steps = 0
+        self.spec_drafted_per_pos = [0] * n_spec
+        self.spec_accepted_per_pos = [0] * n_spec
 
         # Tokens recomputed because a request was preempted, and how many
         # preemptions happened. Both are reported: in the prefix-caching-off mode
@@ -693,6 +702,11 @@ class Scheduler:
                     req.num_computed_tokens -= (n_draft - accepted)
                     self.spec_drafted += n_draft
                     self.spec_accepted += accepted
+                    self.spec_steps += 1
+                    for i in range(min(n_draft, len(self.spec_drafted_per_pos))):
+                        self.spec_drafted_per_pos[i] += 1
+                    for i in range(min(accepted, len(self.spec_accepted_per_pos))):
+                        self.spec_accepted_per_pos[i] += 1
                 req.num_spec_scheduled = 0
                 # A verification step commits 1 + accepted tokens at once, which
                 # can run past the requested length. vLLM stops at max_tokens
@@ -802,6 +816,36 @@ class Scheduler:
         _render("Time to First Token", ttft_values)
         _render("Time per Output Token (excl. 1st token)", tpot_values)
         _render("Inter-token Latency", itl_values, num_space=1)
+        if self.spec is not None:
+            self._print_spec_result()
+
+    def _print_spec_result(self):
+        """Realized speculative acceptance, in vLLM's counter terms.
+
+        Counts are printed as integers so ``bench validate`` can rebuild every
+        rate from them exactly. Printed only when speculative decoding is
+        configured for the instance, so a non-speculative run's output is
+        unchanged.
+        """
+        def _row(label, value):
+            print_markup(f"{label + ':':<68}{value}")
+
+        print_rule("[sim.tagline]Speculative Decoding[/]")
+        _row("Draft length (N)", self.spec.N)
+        _row("Verification steps", self.spec_steps)
+        _row("Drafted tokens", self.spec_drafted)
+        _row("Accepted tokens", self.spec_accepted)
+        if self.spec_drafted:
+            _row("Acceptance rate (%)", f"{self.spec_accepted / self.spec_drafted * 100:.2f}")
+        else:
+            _row("Acceptance rate (%)", "N/A")
+        if self.spec_steps:
+            _row("Mean accept length", f"{1 + self.spec_accepted / self.spec_steps:.2f}")
+        else:
+            _row("Mean accept length", "N/A")
+        for i, (accepted, drafted) in enumerate(
+                zip(self.spec_accepted_per_pos, self.spec_drafted_per_pos), start=1):
+            _row(f"Accepted at position {i}", f"{accepted} of {drafted}")
 
     # print each request results
     def print_request_result(self):

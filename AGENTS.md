@@ -1904,6 +1904,11 @@ of pairing a rate with another rate's curve. A per-position curve sets N when N
 is 0 or -1, before the CUDA graph contract is resolved, and its mean replaces
 any aggregate rate, with a warning when they differ.
 
+The scheduler counts realized acceptance as vLLM does (verification steps, and
+drafted and accepted counts per position) and `print_result` reports them only
+when speculative decoding is configured. `bench validate` parses that block, so
+keep its row labels and integer counts stable.
+
 Scheduling follows vLLM exactly, including its framing: `num_tokens_with_spec =
 num_tokens + spec_tokens`, a request just catches up to it, and rejection rolls
 back with `num_computed_tokens -= num_rejected`. Three details that are easy to
