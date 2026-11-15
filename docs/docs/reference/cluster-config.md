@@ -349,6 +349,7 @@ other instance keeps the CLI value.
 | `async_scheduling` | bool | `--async-scheduling` | Compose the next batch while the current one executes |
 | `num_speculative_tokens` | int | `--num-speculative-tokens` | Draft count, with matching query-length and drafter profile coverage |
 | `spec_acceptance_rate` | float/null | `--spec-acceptance-rate` | Explicit rate or the model's entry in `configs/spec_decode.json`; no generic rate is invented |
+| `spec_position_acceptance` | list/null | `--spec-position-acceptance` | Per-position rates P(accepted >= i), nonincreasing within [0, 1]; sets N when unset and takes precedence over the aggregate and published rates |
 | `spec_acceptance_policy` | choice | `--spec-acceptance-policy` | `FIXED`, `DECAY` or `CUSTOM` acceptance policy |
 | `enable_local_offloading` | bool | `--enable-local-offloading` | Emit graph conversion with local offloading for this instance |
 | `enable_attn_offloading` | bool | `--enable-attn-offloading` | Emit PIM attention offload for this instance |

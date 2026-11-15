@@ -24,7 +24,9 @@ from serving.core.hardware_defaults import apply_hardware_defaults, load_hardwar
 from serving.core.cudagraph import resolve_graph_config, resolve_dp_shapes
 from profiler.core.bundle_metadata import read_bundle
 from profiler.core.execution_metadata import select_execution, graph_options, precision_scope
-from serving.core.spec_decode import AcceptanceModel, published_defaults
+from serving.core.spec_decode import (AcceptanceModel, check_position_acceptance,
+                                      curve_overrides_rate, published_defaults,
+                                      resolve_acceptance_inputs)
 from serving.core.controller import *
 from serving.core.memory_model import *
 from serving.core.graph_generator import *
@@ -271,6 +273,15 @@ def _resolve_mem_util(instance, cli_default):
     return util
 
 
+def _rate_list(text):
+    """argparse type for ``--spec-position-acceptance``: ``0.9,0.8,0.6``."""
+    try:
+        return [float(part) for part in text.split(",")]
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected comma-separated rates such as 0.9,0.8,0.6; got {text!r}")
+
+
 def _build_instance_runtime_configs(instances, args, dtype_to_bits):
     runtime_configs = []
     for instance_id, instance in enumerate(instances):
@@ -318,8 +329,21 @@ def _build_instance_runtime_configs(instances, args, dtype_to_bits):
                 "spec_acceptance_rate", args.spec_acceptance_rate),
             "spec_acceptance_policy": instance.get(
                 "spec_acceptance_policy", args.spec_acceptance_policy),
+            "spec_position_acceptance": instance.get(
+                "spec_position_acceptance", args.spec_position_acceptance),
         })
         cfg = runtime_configs[-1]
+        if cfg["spec_position_acceptance"] is not None:
+            # Checked here rather than when the acceptance model is built, so
+            # a bad curve fails before any profile is read, and so N is known
+            # before the CUDA graph contract below sizes its decode query.
+            n = cfg["num_speculative_tokens"]
+            cfg["spec_position_acceptance"] = check_position_acceptance(
+                cfg["spec_position_acceptance"],
+                None if n in (None, 0, -1) else n,
+                source=f"Instance {instance_id} spec_position_acceptance")
+            if n in (None, 0, -1):
+                cfg["num_speculative_tokens"] = len(cfg["spec_position_acceptance"])
         hardware = load_hardware_yaml(instance["hardware"]) or {}
         capability = hardware.get("spec", {}).get("compute_capability")
         options = instance.get("cudagraph")
@@ -444,19 +468,27 @@ def _build_acceptance_model(model_name, inst_cfg, node_id, instance_id):
     figure has to be given a rate rather than being handed a plausible one:
     acceptance varies from 0.39 to 0.78 across the four modern families, so
     there is no defensible generic default.
-    """
-    n = inst_cfg["num_speculative_tokens"]
-    rate = inst_cfg["spec_acceptance_rate"]
-    if not n and rate is None:
-        return None
 
-    published = published_defaults(model_name) or {}
-    if n in (None, 0, -1):
-        n = published.get("num_speculative_tokens", 0)
-    if rate is None:
-        rate = published.get("acceptance_rate")
+    Explicit inputs take precedence over published ones, most specific first:
+    a per-position curve (``spec_position_acceptance``), then an aggregate
+    rate, then the published curve and rate. See
+    ``spec_decode.resolve_acceptance_inputs``.
+    """
+    explicit_rate = inst_cfg["spec_acceptance_rate"]
+    explicit_curve = inst_cfg.get("spec_position_acceptance")
+    if not inst_cfg["num_speculative_tokens"] and explicit_rate is None \
+            and explicit_curve is None:
+        return None
+    n, rate, curve, source = resolve_acceptance_inputs(
+        inst_cfg["num_speculative_tokens"], explicit_rate, explicit_curve,
+        published_defaults(model_name))
     if not n:
         return None
+    if curve_overrides_rate(explicit_rate, explicit_curve):
+        get_logger("main", node_id=node_id, instance_id=instance_id).warning(
+            "spec_acceptance_rate %s is replaced by the mean %.4f of "
+            "spec_position_acceptance %s, which takes precedence",
+            explicit_rate, rate, curve)
     _require_drafter_cost(model_name, n, node_id, instance_id)
     if rate is None:
         raise ValueError(
@@ -468,7 +500,7 @@ def _build_acceptance_model(model_name, inst_cfg, node_id, instance_id):
     model = AcceptanceModel(
         num_speculative_tokens=n,
         acceptance_rate=rate,
-        position_acceptance=published.get("position_acceptance"),
+        position_acceptance=curve,
         policy=inst_cfg["spec_acceptance_policy"],
         node_id=node_id,
         instance_id=instance_id,
@@ -476,7 +508,8 @@ def _build_acceptance_model(model_name, inst_cfg, node_id, instance_id):
     model.logger.info(
         "Speculative decoding: N=%d, acceptance %.3f (%s), mean accept length %.2f%s",
         model.N, model.rate, model.policy, model.mean_accept_length(),
-        "" if inst_cfg["spec_acceptance_rate"] is not None else " [published]",
+        {"explicit": "", "published": " [published]",
+         "per-position": " [per-position]"}[source],
     )
     return model
 
@@ -520,6 +553,14 @@ def main():
                         'published source reports, not Leviathan\'s conditional alpha -- see '
                         'serving/core/spec_decode.py. Defaults to the model\'s published value; '
                         'a model with no published value must be given one')
+    parser.add_argument('--spec-position-acceptance', type=_rate_list, default=None,
+                        dest='spec_position_acceptance',
+                        help='comma-separated per-position acceptance rates, P(accepted >= i) for '
+                        'draft positions 1..N, as vLLM\'s per-position counters report them. '
+                        'Must be nonincreasing and within [0, 1]. Sets N when '
+                        '--num-speculative-tokens is 0 or -1, and its mean replaces the '
+                        'aggregate rate. Takes precedence over --spec-acceptance-rate and the '
+                        'published curve. Override per instance with "spec_position_acceptance"')
     parser.add_argument('--spec-acceptance-policy', type=str,
                         choices=['FIXED', 'DECAY', 'CUSTOM'], default='FIXED',
                         dest='spec_acceptance_policy',
