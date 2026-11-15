@@ -84,7 +84,10 @@ accepts all five drafts in 60% of steps and none in 5%; independent draws at the
 same rates would give 26% and 0.02%.
 
 A curve of your own, typically one measured on the engine you are comparing
-against, is passed per position:
+against, is passed per position. `bench run --speculative-config` records vLLM's
+as `speculative_decoding.position_acceptance` in `meta.json`, and
+`bench validate` then puts the simulated acceptance beside it in `summary.txt`;
+see the [bench CLI](/docs/reference/bench-cli#speculative-decoding).
 
 ```bash
 python -m serving \
