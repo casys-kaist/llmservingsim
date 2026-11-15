@@ -13,13 +13,34 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) co
   must be finite and nonnegative. Default behavior and metric definitions are
   unchanged. See the
   [bench CLI](https://llmservingsim.ai/docs/reference/bench-cli).
+- Introduce [Simthesizer](https://simthesizer.ai/), a sibling project for
+  coding-agent-driven simulator development, on the website's landing page.
+  An equal-width split below the LLMServingSim hero presents LLMServingSim 2.0
+  for detailed performance and bottleneck analysis, and Simthesizer for
+  quickly prototyping new ideas with coding agents. The hero gains a Get
+  Started button for LLMServingSim.
+- Show recorded end-to-end accuracy on the landing page: the largest TTFT,
+  TPOT or latency error against real vLLM for each headline deployment in
+  [Validation](https://llmservingsim.ai/docs/validation), with its scope. The
+  feature section now covers measured profiles, the memory hierarchy and KV
+  cache, ASTRA-Sim networking, heterogeneous and disaggregated systems, model
+  architectures and workloads, and the research section lists all three
+  LLMServingSim publications.
 
 ### Fixed
 
 - Recognize the fully observed single-node TP1/PP1/DP1 READY path when vLLM
   supplies local DP rank zero. Native identity, engine coverage, response and
   capacity checks remain required; unsupported topologies remain unknown.
-
+- State the MIT License in the website footer and contributor welcome page,
+  matching the repository's `LICENSE`; both previously said Apache 2.0.
+- Delay an ASTRA-Sim instance's tail-rank completion report until every rank
+  has completed the same workload iteration. Rank-local work after the final
+  TP collective can no longer let faster boundary ranks retire a batch, free
+  its scheduler state and under-report latency while a middle rank is still
+  running. PP lookahead remains available because ranks already executing a
+  later iteration count as complete for earlier iterations. See
+  [parallelism mechanics](https://llmservingsim.ai/docs/simulator/parallelism-mechanics).
 - Delete each batch's ASTRA-Sim workload folder during the run, once
   `pp_size + 1` newer ones of the same instance or DP group have been handed
   out, instead of keeping every batch's graph until the end. A long simulation's
