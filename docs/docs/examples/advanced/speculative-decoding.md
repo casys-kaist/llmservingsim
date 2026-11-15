@@ -108,6 +108,26 @@ python -m serving \
   replaces any rate given beside it, with a warning when the two differ.
 - `FIXED` uses only the curve's mean.
 
+A speculative run ends each instance's results with the acceptance it realized,
+counted the way vLLM counts it. From the run above:
+
+```text
+───────────────────────────── Speculative Decoding ─────────────────────────────
+Draft length (N):                                                   3
+Verification steps:                                                 191
+Drafted tokens:                                                     573
+Accepted tokens:                                                    397
+Acceptance rate (%):                                                69.28
+Mean accept length:                                                 3.08
+Accepted at position 1:                                             174 of 191
+Accepted at position 2:                                             140 of 191
+Accepted at position 3:                                             83 of 191
+```
+
+`Accepted at position i` is how many verification steps accepted position i,
+of how many drafted it. Without speculative decoding the block is absent and
+the output is unchanged.
+
 ## What it changes in the simulation
 
 **Scheduling follows vLLM exactly**, including its framing:
