@@ -727,6 +727,62 @@ def _speculative_meta(summary: dict | None) -> dict:
     return {"speculative_decoding": summary} if summary is not None else {}
 
 
+def _nvml_facts() -> dict:
+    """Driver version and per-device power limits from NVML.
+
+    The enforced limit is what the card was actually held to, beside its
+    default and its maximum, since a capped card is a different machine for a
+    latency comparison. ``max_power_limit_w`` is the value the profiler's
+    ``hardware.yaml`` calls ``power_limit_w`` (nvidia-smi ``power.max_limit``).
+    NVML lists every GPU on the host in NVML order, regardless of
+    ``CUDA_VISIBLE_DEVICES``; its UUIDs carry a ``GPU-`` prefix that
+    ``device_uuid`` lacks. Uses vLLM's own NVML binding when present.
+    """
+    try:
+        try:
+            from vllm.utils.import_utils import import_pynvml
+            pynvml = import_pynvml()
+        except ImportError:
+            import pynvml
+    except ImportError as exc:
+        return {"nvml_error": f"{type(exc).__name__}: {exc}"}
+
+    def _text(value):
+        return value.decode() if isinstance(value, bytes) else str(value)
+
+    try:
+        pynvml.nvmlInit()
+    except Exception as exc:
+        return {"nvml_error": f"{type(exc).__name__}: {exc}"}
+    try:
+        facts: dict = {"driver_version": _text(pynvml.nvmlSystemGetDriverVersion())}
+        devices = []
+        for index in range(pynvml.nvmlDeviceGetCount()):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+            device = {"index": index, "uuid": _text(pynvml.nvmlDeviceGetUUID(handle))}
+            for key, query in (
+                    ("enforced_power_limit_w", pynvml.nvmlDeviceGetEnforcedPowerLimit),
+                    ("default_power_limit_w",
+                     pynvml.nvmlDeviceGetPowerManagementDefaultLimit),
+                    ("max_power_limit_w",
+                     lambda h: pynvml.nvmlDeviceGetPowerManagementLimitConstraints(h)[1])):
+                try:
+                    device[key] = query(handle) / 1000.0     # NVML reports mW
+                except Exception as exc:
+                    device[key] = None
+                    device[f"{key}_error"] = f"{type(exc).__name__}: {exc}"
+            devices.append(device)
+        facts["nvml_devices"] = devices
+        return facts
+    except Exception as exc:
+        return {"nvml_error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+
+
 def _hardware_facts() -> dict:
     """Which accelerator this ran on, for matching against profiler/perf/<hw>/."""
     facts = {"cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES")}
@@ -756,6 +812,7 @@ def _hardware_facts() -> dict:
             facts["device_uuid"] = str(getattr(props, "uuid", "unknown"))
     except Exception as exc:
         facts["error"] = f"{type(exc).__name__}: {exc}"
+    facts.update(_nvml_facts())
     return facts
 
 

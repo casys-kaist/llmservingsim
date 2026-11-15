@@ -7,6 +7,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) co
 
 ### Added
 
+- Record the driver version and each GPU's enforced, default and maximum power
+  limit in a bench run's `meta.json` `hardware` facts, read from NVML, so a
+  power-capped card is visible beside the latencies it produced. See the
+  [bench CLI](https://llmservingsim.ai/docs/reference/bench-cli).
 - Record speculative decoding with `bench run --speculative-config`: vLLM's
   acceptance counters per tick in `timeseries.csv`, per run and draft position
   in `meta.json`, and per request in `requests.jsonl`

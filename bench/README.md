@@ -241,6 +241,12 @@ bench/results/<run_id>/
 `--prefix NAME` prepends `NAME_` to each validation filename. `meta.json`
 includes the dataset hash, vLLM version, requested engine kwargs, wall-clock
 start/end, resolved `VllmConfig`, device placement and `kv_cache` fields.
+`hardware` also records the driver version and, per NVML device, its UUID and
+its enforced, default and maximum power limits in watts, so a capped card is
+visible beside the latencies it produced. `max_power_limit_w` is the value a
+profiler `hardware.yaml` calls `power_limit_w`. NVML lists every GPU on the
+host in NVML order, regardless of `CUDA_VISIBLE_DEVICES`, and its UUIDs carry
+the `GPU-` prefix that `device_uuid` omits.
 New runs also retain `execution`: a read-only worker startup observation of the
 effective runner, graph mode and completed capture sizes, qualified by model,
 precision and deployment limits. Unsupported or incomplete observations remain
