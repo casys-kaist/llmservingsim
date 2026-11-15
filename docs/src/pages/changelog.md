@@ -10,6 +10,17 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) co
 
 ### Added
 
+- Record speculative decoding with `bench run --speculative-config`: vLLM's
+  acceptance counters per tick in `timeseries.csv`, per run and draft position
+  in `meta.json`, and per request in `requests.jsonl`
+  (`--per-request-spec-decode-metrics`). Only a fixed draft length is accepted:
+  n-gram and suffix proposers and variable-N configs are refused.
+  `bench validate` adds measured and simulated acceptance to `summary.txt`
+  beneath the latency table and warns when the draft lengths differ. Runs that
+  do not speculate gain no speculative engine argument or output field, and
+  their summaries are byte-identical. See the
+  [bench CLI](https://llmservingsim.ai/docs/reference/bench-cli#speculative-decoding)
+  ([#85](https://github.com/casys-kaist/LLMServingSim/issues/85)).
 - End each instance's results with its realized speculative acceptance when
   speculative decoding is configured: verification steps, drafted and accepted
   tokens, and accepted counts per draft position. Other output is unchanged.

@@ -15,6 +15,7 @@ Module map:
         runner.py               AsyncLLM driver (vLLM v1)
         recorder.py             writes meta.json / requests.jsonl / timeseries.csv
         stat_logger.py          custom vLLM StatLoggerBase that fills timeseries
+        spec_decode.py          speculative acceptance recording and comparison
         validate.py             bench-vs-sim comparison
         plots.py                throughput / running-waiting / latency-CDF helpers
         logger.py               Rich-based logger + stdio capture
@@ -32,6 +33,10 @@ Output schema (one bench run)::
                              input_toks, output_toks
       timeseries.csv         per-tick: t, prompt_throughput, gen_throughput,
                              running, waiting, kv_cache_pct
+
+    A run with --speculative-config also records vLLM's acceptance counters:
+    spec_* timeseries columns, meta.json speculative_decoding and a
+    spec_decode entry per request.
 """
 
 __version__ = "0.1.0"

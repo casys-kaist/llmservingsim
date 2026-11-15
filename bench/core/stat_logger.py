@@ -18,6 +18,8 @@ from typing import Any
 
 from vllm.v1.metrics.loggers import StatLoggerBase
 
+from bench.core import spec_decode
+
 
 @dataclass
 class _Sample:
@@ -33,6 +35,9 @@ class _Sample:
     num_preempted_reqs: int     # requests preempted this iteration
     kv_cache_pct: float
     engine_idx: int
+    # This step's SchedulerStats.spec_decoding_stats, as spec_decode.step_counts
+    # returns it; all zeros on a step that verified no drafts.
+    spec: tuple = (0, 0, 0, [], [])
 
 
 class BenchStatLogger(StatLoggerBase):
@@ -45,12 +50,19 @@ class BenchStatLogger(StatLoggerBase):
 
     samples: list[_Sample] = []
     _t0: float | None = None
+    # The configured draft length when speculative decoding is on, else None.
+    # Read from the engine's resolved config, so it is the N vLLM ran.
+    num_speculative_tokens: int | None = None
 
     def __init__(self, vllm_config: Any, engine_index: int = 0):
         self.vllm_config = vllm_config
         self.engine_index = engine_index
         if BenchStatLogger._t0 is None:
             BenchStatLogger._t0 = time.monotonic()
+        speculative = getattr(vllm_config, "speculative_config", None)
+        if speculative is not None:
+            BenchStatLogger.num_speculative_tokens = int(
+                speculative.num_speculative_tokens)
 
     def record(
         self,
@@ -114,6 +126,11 @@ class BenchStatLogger(StatLoggerBase):
             num_preempted_reqs=preempted,
             kv_cache_pct=cache_pct,
             engine_idx=engine_idx if engine_idx else self.engine_index,
+            # Read directly, like kv_cache_usage above: a renamed field must
+            # fail rather than record zeros.
+            spec=(spec_decode.step_counts(scheduler_stats.spec_decoding_stats)
+                  if BenchStatLogger.num_speculative_tokens is not None
+                  else (0, 0, 0, [], [])),
         ))
 
     def log_engine_initialized(self) -> None:
@@ -123,6 +140,15 @@ class BenchStatLogger(StatLoggerBase):
     def reset(cls) -> None:
         cls.samples = []
         cls._t0 = None
+        cls.num_speculative_tokens = None
+
+    @classmethod
+    def speculative_summary(cls) -> dict | None:
+        """Run totals for ``meta.json``, or None without speculative decoding."""
+        if cls.num_speculative_tokens is None:
+            return None
+        return spec_decode.run_summary(
+            cls.num_speculative_tokens, [s.spec for s in cls.samples])
 
     @classmethod
     def downsample_to_csv_rows(cls, tick_seconds: float) -> tuple[list[str], list[list]]:
@@ -149,6 +175,12 @@ class BenchStatLogger(StatLoggerBase):
             "preempted",              # summed over the tick, across engines
             "kv_cache_pct",
         ]
+        speculative = cls.num_speculative_tokens is not None
+        if speculative:
+            # Counts summed over the tick and engines, like ``preempted``:
+            # verification steps (one per request per step that verified
+            # drafts), draft tokens proposed and draft tokens accepted.
+            header += ["spec_drafts", "spec_draft_tokens", "spec_accepted_tokens"]
         if not cls.samples:
             return header, []
 
@@ -201,6 +233,8 @@ class BenchStatLogger(StatLoggerBase):
                 preempted_sum,
                 round(cache_pct, 2),
             ])
+            if speculative:
+                rows[-1] += [sum(s.spec[i] for s in in_bucket) for i in range(3)]
             bucket_idx += 1
 
         return header, rows

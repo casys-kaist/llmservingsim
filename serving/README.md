@@ -374,9 +374,10 @@ modern families range from 0.39 to 0.78, so there is nothing defensible to
 guess.
 
 `DECAY` draws a prefix of the draft, as vLLM accepts one: one uniform draw per
-step, so P(accepted >= i) is the per-position curve. A measured curve is passed with
-`--spec-position-acceptance`; it must be nonincreasing and takes precedence
-over an aggregate rate, which in turn replaces the published curve.
+step, so P(accepted >= i) is the per-position curve. A measured curve, such as
+the `position_acceptance` a `bench run --speculative-config` records, is passed
+with `--spec-position-acceptance`; it must be nonincreasing and takes
+precedence over an aggregate rate, which in turn replaces the published curve.
 A speculative run ends each instance's results with its realized acceptance,
 in the counters vLLM reports.
 
