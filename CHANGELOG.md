@@ -27,6 +27,15 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) co
   architectures and workloads, and the research section lists all three
   LLMServingSim publications.
 
+### Changed
+
+- Draw `DECAY` speculative acceptance as a prefix of the draft, the way vLLM
+  accepts tokens: one uniform draw per step, so P(accepted >= i) follows the
+  per-position curve. A rising or out-of-range curve is refused instead of
+  clipped. `FIXED` and `CUSTOM` are unchanged, as are recorded clocks, which
+  use `FIXED`. See
+  [speculative decoding](https://llmservingsim.ai/docs/examples/advanced/speculative-decoding#per-position-acceptance).
+
 ### Fixed
 
 - Recognize the fully observed single-node TP1/PP1/DP1 READY path when vLLM

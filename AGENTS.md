@@ -1887,6 +1887,15 @@ read as conditionals. **Don't reintroduce the capped-geometric formula.**
 A model with no published figure gets no default -- rates run from 0.39 to 0.78
 across the four modern families, so there is nothing defensible to guess.
 
+**`DECAY` draws a prefix.** vLLM accepts a prefix of the draft, and its
+`SpecDecodingStats.observe_draft` counts it that way, so per-position marginals
+m_i fix the whole distribution: P(accepted >= i) = m_i. `DECAY` samples it with
+one uniform draw per step, accepting positions while the draw is below m_i.
+Independent per-position draws keep the mean but not the spread (on the Qwen3.8
+curve, variance 0.80 against 2.61). A curve must be nonincreasing with every
+entry in [0, 1], the rule vLLM applies to `synthetic_acceptance_rates`; invalid
+curves raise rather than being clipped.
+
 Scheduling follows vLLM exactly, including its framing: `num_tokens_with_spec =
 num_tokens + spec_tokens`, a request just catches up to it, and rejection rolls
 back with `num_computed_tokens -= num_rejected`. Three details that are easy to

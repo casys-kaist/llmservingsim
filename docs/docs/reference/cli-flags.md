@@ -78,7 +78,7 @@ floating activations, not its weight quantization; different activations get an
 | --- | --- | --- | --- |
 | `--num-speculative-tokens` **(per-instance)** | int | `0` (off when no acceptance rate is supplied) | Positive values choose draft length N; `-1` requests the published N from `configs/spec_decode.json`. Omitting both flags leaves speculation off. Supplying a rate with N=`0` also requests the published N; without a published N that case remains off |
 | `--spec-acceptance-rate` **(per-instance)** | float | the model's published value | Fraction of drafted tokens the target accepts, so the mean accept length is `1 + rate * N`. **Marginal**, which is what every published source reports — not Leviathan's conditional per-position alpha. A model with no published figure must be given one |
-| `--spec-acceptance-policy` **(per-instance)** | `FIXED` / `DECAY` / `CUSTOM` | `FIXED` | How the accepted count is drawn. `DECAY` uses per-position rates, which fall with draft position — same mean, different spread |
+| `--spec-acceptance-policy` **(per-instance)** | `FIXED` / `DECAY` / `CUSTOM` | `FIXED` | How the accepted count is drawn. `FIXED` accepts each position independently at the pooled rate. `DECAY` draws a prefix of the draft from per-position rates, one uniform draw per step, so P(accepted >= i) follows the curve: same mean, different spread. Its curve is the model's published one when it has N entries, else a ramp around the rate |
 
 **Model-owned MTP drafter time is charged from its profiles; missing required
 catalog entries or measurements are errors.** vLLM runs the drafter **N times per step** —

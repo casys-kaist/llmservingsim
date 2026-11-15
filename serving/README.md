@@ -373,6 +373,9 @@ reproduces all nine published (rate, length) pairs to within 0.01 tokens.
 modern families range from 0.39 to 0.78, so there is nothing defensible to
 guess.
 
+`DECAY` draws a prefix of the draft, as vLLM accepts one: one uniform draw per
+step, so P(accepted >= i) is the per-position curve.
+
 Model-owned MTP drafter passes are charged from catalog bindings and profile
 tables; missing required data is an error. Separate-model or n-gram drafting
 has no modeled drafter time and warns that speedup is an upper bound. See the

@@ -69,8 +69,19 @@ Llama-3.1-8B has no published rate, hence the explicit
 the published value is used, logged as `[published]`.
 
 `--spec-acceptance-policy` picks how the accepted count is drawn:
-`FIXED` (default), `DECAY` (per-position rates, which fall with draft
-position — same mean, wider spread), or `CUSTOM`.
+`FIXED` (default, each draft position accepted independently at the pooled
+rate), `DECAY` (a prefix of the draft, drawn from per-position rates as vLLM
+accepts one), or `CUSTOM`.
+
+## Per-position acceptance
+
+vLLM accepts a **prefix** of the draft: a step that accepts k tokens accepted
+positions 1 to k. So the per-position rates m_i, the share of verification
+steps that accepted position i, fix the whole distribution of the accepted
+count, P(accepted >= i) = m_i. `DECAY` samples exactly that, with one uniform
+draw per step. On the published Qwen3.8 curve (0.95 falling to 0.60, N=5) it
+accepts all five drafts in 60% of steps and none in 5%; independent draws at the
+same rates would give 26% and 0.02%.
 
 ## What it changes in the simulation
 
