@@ -524,8 +524,10 @@ def main():
                         choices=['FIXED', 'DECAY', 'CUSTOM'], default='FIXED',
                         dest='spec_acceptance_policy',
                         help='how the accepted count is drawn: FIXED (default, every draft '
-                        'position at the pooled rate), DECAY (per-position rates, which fall with '
-                        'draft position -- same mean, different spread), CUSTOM (user-defined)')
+                        'position independently at the pooled rate), DECAY (a prefix of the '
+                        'draft from per-position rates, one uniform draw per step, so '
+                        'P(accepted >= i) is the curve -- same mean, different spread), '
+                        'CUSTOM (user-defined)')
     parser.add_argument('--request-routing-policy', type=str, choices=['LOAD', 'RR', 'RAND', 'CUSTOM'], default='LOAD',
                         help='request routing policy across instances: LOAD (vLLM-style weighted least-loaded, default), '
                         'RR (round-robin), RAND (random), CUSTOM (requires implementing '
