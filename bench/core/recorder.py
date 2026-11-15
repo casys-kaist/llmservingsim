@@ -49,7 +49,9 @@ def write_meta(output_dir: Path, **fields: Any) -> None:
     ``hardware``
         Accelerator name, total memory, compute capability, CUDA/torch
         versions -- enough to match a run against a ``profiler/perf/<hw>/``
-        bundle.
+        bundle -- plus the driver version and each NVML device's enforced,
+        default and maximum power limit, or ``nvml_error`` when NVML is
+        unavailable.
     ``resolved_config``
         vLLM's whole resolved ``VllmConfig``, one key per sub-config, with
         defaults filled in and inferred values (``max_model_len``,

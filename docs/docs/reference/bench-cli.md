@@ -170,7 +170,9 @@ is not overwritten. Final results require `meta.json`, `requests.jsonl` and
                      (num_gpu_blocks, block_size, num_kv_tokens,
                      gpu_memory_utilization, qualified capacity), hardware (device name,
                      total memory, UUID, CPU affinity, allowed NUMA nodes,
-                     CUDA / torch versions), and
+                     CUDA / torch versions, driver version, and per NVML
+                     device its UUID and enforced, default and maximum power
+                     limits; NVML lists every host GPU), and
                      resolved_config -- the whole VllmConfig, one key
                      per sub-config; execution -- effective worker graph
                      policy after capture, or unknown with a reason
