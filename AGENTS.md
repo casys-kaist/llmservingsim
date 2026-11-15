@@ -1896,6 +1896,14 @@ curve, variance 0.80 against 2.61). A curve must be nonincreasing with every
 entry in [0, 1], the rule vLLM applies to `synthetic_acceptance_rates`; invalid
 curves raise rather than being clipped.
 
+**Explicit inputs win, most specific first**
+(`spec_decode.resolve_acceptance_inputs`): `--spec-position-acceptance`, then
+`--spec-acceptance-rate`, then the published curve and rate. An explicit
+aggregate rate replaces the published curve, so `DECAY` ramps around it instead
+of pairing a rate with another rate's curve. A per-position curve sets N when N
+is 0 or -1, before the CUDA graph contract is resolved, and its mean replaces
+any aggregate rate, with a warning when they differ.
+
 Scheduling follows vLLM exactly, including its framing: `num_tokens_with_spec =
 num_tokens + spec_tokens`, a request just catches up to it, and rejection rolls
 back with `num_computed_tokens -= num_rejected`. Three details that are easy to

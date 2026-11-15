@@ -10,6 +10,13 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) co
 
 ### Added
 
+- Accept a measured per-position acceptance curve for speculative decoding with
+  `--spec-position-acceptance` or the per-instance `spec_position_acceptance`.
+  The curve must be nonincreasing within [0, 1] and sets N when N is not
+  given. It takes precedence over an aggregate rate, which is replaced by the
+  curve's mean. See
+  [speculative decoding](https://llmservingsim.ai/docs/examples/advanced/speculative-decoding#per-position-acceptance)
+  ([#85](https://github.com/casys-kaist/LLMServingSim/issues/85)).
 - Introduce [Simthesizer](https://simthesizer.ai/), a sibling project for
   coding-agent-driven simulator development, on the website's landing page.
   An equal-width split below the LLMServingSim hero presents LLMServingSim 2.0
@@ -32,6 +39,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) co
   clipped. `FIXED` and `CUSTOM` are unchanged, as are recorded clocks, which
   use `FIXED`. See
   [speculative decoding](https://llmservingsim.ai/docs/examples/advanced/speculative-decoding#per-position-acceptance).
+- Let an explicit `--spec-acceptance-rate` replace a model's published
+  per-position curve instead of being paired with it, so `DECAY` ramps around
+  the given rate.
 
 ### Fixed
 

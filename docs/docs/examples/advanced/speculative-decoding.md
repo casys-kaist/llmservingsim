@@ -83,6 +83,31 @@ draw per step. On the published Qwen3.8 curve (0.95 falling to 0.60, N=5) it
 accepts all five drafts in 60% of steps and none in 5%; independent draws at the
 same rates would give 26% and 0.02%.
 
+A curve of your own, typically one measured on the engine you are comparing
+against, is passed per position:
+
+```bash
+python -m serving \
+  --cluster-config 'configs/cluster/single_node_single_instance.json' \
+  --spec-acceptance-policy DECAY --spec-position-acceptance 0.9,0.7,0.4 \
+  --dataset 'workloads/example_trace.jsonl' \
+  --output 'outputs/spec_curve_run.csv' \
+  --num-reqs 10
+```
+
+- **N comes from the curve** when `--num-speculative-tokens` is `0` or `-1`;
+  given explicitly, the curve must have N entries.
+- **The curve must be nonincreasing** and within [0, 1], the rule vLLM applies
+  to its own `synthetic_acceptance_rates`. Position i is accepted only when
+  every earlier position was, so a rising curve describes no real run and is
+  refused rather than clipped.
+- **Explicit inputs win, most specific first.** The per-position curve, then
+  `--spec-acceptance-rate`, then the published curve and rate. An explicit rate
+  replaces the published curve too: `DECAY` ramps around that rate rather than
+  pairing it with a curve whose mean is a different rate. The curve's mean
+  replaces any rate given beside it, with a warning when the two differ.
+- `FIXED` uses only the curve's mean.
+
 ## What it changes in the simulation
 
 **Scheduling follows vLLM exactly**, including its framing:

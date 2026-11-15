@@ -104,7 +104,7 @@ from one list is visible against the other.
 | **memory** | `--block-size`, `--npu-memory-utilization` |
 | **prefix caching** | `--enable-prefix-caching`; run-wide: `--enable-prefix-sharing`, `--prefix-storage` |
 | **routing** *(run-wide)* | `--request-routing-policy`, `--expert-routing-policy`, `--gate-stats` |
-| **speculative decoding** | `--num-speculative-tokens`, `--spec-acceptance-rate`, `--spec-acceptance-policy` |
+| **speculative decoding** | `--num-speculative-tokens`, `--spec-acceptance-rate`, `--spec-position-acceptance`, `--spec-acceptance-policy` |
 | **offloading** | `--enable-attn-offloading`, `--enable-sub-batch-interleaving`, `--enable-local-offloading` |
 | **trace / graph** | `--enable-block-copy`; run-wide: `--save-trace-text`, `--keep-inputs` |
 | **backend** *(run-wide)* | `--network-backend` |
@@ -374,7 +374,9 @@ modern families range from 0.39 to 0.78, so there is nothing defensible to
 guess.
 
 `DECAY` draws a prefix of the draft, as vLLM accepts one: one uniform draw per
-step, so P(accepted >= i) is the per-position curve.
+step, so P(accepted >= i) is the per-position curve. A measured curve is passed with
+`--spec-position-acceptance`; it must be nonincreasing and takes precedence
+over an aggregate rate, which in turn replaces the published curve.
 
 Model-owned MTP drafter passes are charged from catalog bindings and profile
 tables; missing required data is an error. Separate-model or n-gram drafting
