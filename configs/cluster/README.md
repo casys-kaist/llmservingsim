@@ -98,6 +98,7 @@ topology assumptions in the general scenarios in this directory.
 | `async_scheduling` | Boolean | No | Compose the next batch while the current one runs. Per-instance override for `--async-scheduling` (default on) |
 | `num_speculative_tokens` | Integer | No | Per-instance draft count; requires matching query-length and drafter coverage |
 | `spec_acceptance_rate` | Float/null | No | Per-instance acceptance-rate override; null uses a matching entry in `configs/spec_decode.json`, or raises if speculation is requested without one |
+| `spec_position_acceptance` | List/null | No | Per-instance per-position rates P(accepted >= i), nonincreasing within [0, 1]; sets N when unset and takes precedence over `spec_acceptance_rate` and the published curve |
 | `spec_acceptance_policy` | String | No | Per-instance `FIXED`, `DECAY` or `CUSTOM` acceptance policy |
 | `enable_local_offloading` | Boolean | No | Per-instance override for `--enable-local-offloading` |
 | `enable_attn_offloading` | Boolean | No | Per-instance override for `--enable-attn-offloading` |

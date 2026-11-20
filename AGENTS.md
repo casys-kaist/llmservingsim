@@ -75,6 +75,7 @@ LLMServingSim/
 │   │   ├── kv_cache_metadata.py # qualified per-engine startup READY capacities
 │   │   ├── execution_metadata.py # Read-only completed worker graph observations
 │   │   ├── stat_logger.py      # custom vLLM StatLoggerBase that fills timeseries
+│   │   ├── spec_decode.py      # speculative acceptance recording + comparison
 │   │   ├── validate.py         # bench-vs-sim comparison entry point
 │   │   ├── plots.py            # throughput / running-waiting / latency-CDF plot helpers
 │   │   └── logger.py           # Rich-based logger + stdio capture
@@ -1886,6 +1887,39 @@ read as conditionals. **Don't reintroduce the capped-geometric formula.**
 
 A model with no published figure gets no default -- rates run from 0.39 to 0.78
 across the four modern families, so there is nothing defensible to guess.
+
+**`DECAY` draws a prefix.** vLLM accepts a prefix of the draft, and its
+`SpecDecodingStats.observe_draft` counts it that way, so per-position marginals
+m_i fix the whole distribution: P(accepted >= i) = m_i. `DECAY` samples it with
+one uniform draw per step, accepting positions while the draw is below m_i.
+Independent per-position draws keep the mean but not the spread (on the Qwen3.8
+curve, variance 0.80 against 2.61). A curve must be nonincreasing with every
+entry in [0, 1], the rule vLLM applies to `synthetic_acceptance_rates`; invalid
+curves raise rather than being clipped.
+
+**Explicit inputs win, most specific first**
+(`spec_decode.resolve_acceptance_inputs`): `--spec-position-acceptance`, then
+`--spec-acceptance-rate`, then the published curve and rate. An explicit
+aggregate rate replaces the published curve, so `DECAY` ramps around it instead
+of pairing a rate with another rate's curve. A per-position curve sets N when N
+is 0 or -1, before the CUDA graph contract is resolved, and its mean replaces
+any aggregate rate, with a warning when they differ.
+
+The scheduler counts realized acceptance as vLLM does (verification steps, and
+drafted and accepted counts per position) and `print_result` reports them only
+when speculative decoding is configured. `bench validate` parses that block, so
+keep its row labels and integer counts stable.
+
+`bench run --speculative-config` records the same counters from vLLM's
+`SchedulerStats.spec_decoding_stats` (per tick and per run) and its
+`per_request_spec_decode_metrics` (per request), and `meta.json`'s
+`speculative_decoding.position_acceptance` is the curve
+`--spec-position-acceptance` takes: accepted per position over verification
+steps, which never rises. Fixed draft length only: n-gram and suffix proposers
+and variable-N configs are refused, before boot and again on the resolved
+config. A run that does not speculate gains no speculative engine argument or
+output field; keep it that way, since committed references and `summary.txt`
+digests depend on it.
 
 Scheduling follows vLLM exactly, including its framing: `num_tokens_with_spec =
 num_tokens + spec_tokens`, a request just catches up to it, and rejection rolls

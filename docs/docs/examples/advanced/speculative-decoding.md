@@ -69,8 +69,67 @@ Llama-3.1-8B has no published rate, hence the explicit
 the published value is used, logged as `[published]`.
 
 `--spec-acceptance-policy` picks how the accepted count is drawn:
-`FIXED` (default), `DECAY` (per-position rates, which fall with draft
-position — same mean, wider spread), or `CUSTOM`.
+`FIXED` (default, each draft position accepted independently at the pooled
+rate), `DECAY` (a prefix of the draft, drawn from per-position rates as vLLM
+accepts one), or `CUSTOM`.
+
+## Per-position acceptance
+
+vLLM accepts a **prefix** of the draft: a step that accepts k tokens accepted
+positions 1 to k. So the per-position rates m_i, the share of verification
+steps that accepted position i, fix the whole distribution of the accepted
+count, P(accepted >= i) = m_i. `DECAY` samples exactly that, with one uniform
+draw per step. On the published Qwen3.8 curve (0.95 falling to 0.60, N=5) it
+accepts all five drafts in 60% of steps and none in 5%; independent draws at the
+same rates would give 26% and 0.02%.
+
+A curve of your own, typically one measured on the engine you are comparing
+against, is passed per position. `bench run --speculative-config` records vLLM's
+as `speculative_decoding.position_acceptance` in `meta.json`, and
+`bench validate` then puts the simulated acceptance beside it in `summary.txt`;
+see the [bench CLI](/docs/reference/bench-cli#speculative-decoding).
+
+```bash
+python -m serving \
+  --cluster-config 'configs/cluster/single_node_single_instance.json' \
+  --spec-acceptance-policy DECAY --spec-position-acceptance 0.9,0.7,0.4 \
+  --dataset 'workloads/example_trace.jsonl' \
+  --output 'outputs/spec_curve_run.csv' \
+  --num-reqs 10
+```
+
+- **N comes from the curve** when `--num-speculative-tokens` is `0` or `-1`;
+  given explicitly, the curve must have N entries.
+- **The curve must be nonincreasing** and within [0, 1], the rule vLLM applies
+  to its own `synthetic_acceptance_rates`. Position i is accepted only when
+  every earlier position was, so a rising curve describes no real run and is
+  refused rather than clipped.
+- **Explicit inputs win, most specific first.** The per-position curve, then
+  `--spec-acceptance-rate`, then the published curve and rate. An explicit rate
+  replaces the published curve too: `DECAY` ramps around that rate rather than
+  pairing it with a curve whose mean is a different rate. The curve's mean
+  replaces any rate given beside it, with a warning when the two differ.
+- `FIXED` uses only the curve's mean.
+
+A speculative run ends each instance's results with the acceptance it realized,
+counted the way vLLM counts it. From the run above:
+
+```text
+───────────────────────────── Speculative Decoding ─────────────────────────────
+Draft length (N):                                                   3
+Verification steps:                                                 191
+Drafted tokens:                                                     573
+Accepted tokens:                                                    397
+Acceptance rate (%):                                                69.28
+Mean accept length:                                                 3.08
+Accepted at position 1:                                             174 of 191
+Accepted at position 2:                                             140 of 191
+Accepted at position 3:                                             83 of 191
+```
+
+`Accepted at position i` is how many verification steps accepted position i,
+of how many drafted it. Without speculative decoding the block is absent and
+the output is unchanged.
 
 ## What it changes in the simulation
 

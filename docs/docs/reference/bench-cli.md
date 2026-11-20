@@ -120,6 +120,32 @@ The benchmark CLI does not expose every vLLM engine option. In particular,
 settings. Verify effective settings and observed KV capacity for every new
 reference, including when using an explicit `--kv-cache-memory-bytes` budget.
 
+### Speculative decoding
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--speculative-config` | JSON object | unset | vLLM `speculative_config`, passed to the engine unchanged and recorded in `meta.json` `engine_kwargs`, e.g. `{"method": "eagle3", "model": "<drafter>", "num_speculative_tokens": 3}`. Fixed draft length only: the `ngram`, `ngram_gpu` and `suffix` proposers, `num_speculative_tokens_per_batch_size` and `enable_adaptive_verification` are refused before boot, and the resolved config is checked again after boot |
+| `--per-request-spec-decode-metrics` | `none` / `summary` / `detailed` | `summary` with `--speculative-config` | vLLM's per-request acceptance metrics, written to `requests.jsonl` as `spec_decode`. `detailed` adds the accepted and drafted count of every verify step. Either adds a per-request counter update to vLLM's output loop; `none` turns it off. Requires `--speculative-config` |
+
+A run that does not speculate gains no speculative engine argument or output
+field. With speculation, three outputs gain vLLM's own `SpecDecodingStats` counters:
+verification steps, drafted and accepted tokens, and accepted counts per draft
+position.
+
+- `timeseries.csv` adds `spec_drafts`, `spec_draft_tokens` and
+  `spec_accepted_tokens`, counts summed over the tick and DP engines.
+- `meta.json` adds `speculative_decoding`: run totals, per draft position as
+  well, with `acceptance_rate`, `mean_acceptance_length` and
+  `position_acceptance`. The last is accepted per position over verification
+  steps, P(accepted >= i) as vLLM's logger reports it, which never rises; it is
+  the curve the simulator's `--spec-position-acceptance` takes.
+- `requests.jsonl` adds `spec_decode` per request: the acceptance histogram,
+  mean acceptance length, draft acceptance rate and step counts vLLM reports,
+  plus `per_step_accepted` and `per_step_drafted` under `detailed`.
+
+`bench` replays greedily at forced output lengths (`ignore_eos`), so the
+recorded acceptance belongs to that replay, not to the model in general.
+
 ### Workload and output
 
 Normal serving runs save `engine_start.json` before submitting requests,
@@ -144,7 +170,9 @@ is not overwritten. Final results require `meta.json`, `requests.jsonl` and
                      (num_gpu_blocks, block_size, num_kv_tokens,
                      gpu_memory_utilization, qualified capacity), hardware (device name,
                      total memory, UUID, CPU affinity, allowed NUMA nodes,
-                     CUDA / torch versions), and
+                     CUDA / torch versions, driver version, and per NVML
+                     device its UUID and enforced, default and maximum power
+                     limits; NVML lists every host GPU), and
                      resolved_config -- the whole VllmConfig, one key
                      per sub-config; execution -- effective worker graph
                      policy after capture, or unknown with a reason
@@ -245,6 +273,14 @@ into a subdirectory of the bench run.
   <prefix>_latency.png        TTFT / TPOT / latency CDFs
   <prefix>_summary.txt        mean and P50 / P90 / P95 / P99 per metric, with diff%
 ```
+
+When either side ran speculative decoding, `summary.txt` gains an acceptance
+table beneath the latency groups: draft length, verification steps, drafted and
+accepted tokens, acceptance rate, mean accept length and per-position
+acceptance, vLLM beside the simulator with diff%. The simulator side is read
+from the speculative block that ends each instance's results in `sim.log`. It
+warns when only one side speculated or the draft lengths differ. Without
+speculation the summary is unchanged.
 
 ### Matched metric definitions
 

@@ -17,6 +17,7 @@ bench/                         Python package: python -m bench
 │   ├── kv_cache_metadata.py     qualified per-engine startup READY capacities
 │   ├── execution_metadata.py   completed worker graph observations
 │   ├── stat_logger.py          custom vLLM StatLoggerBase that fills timeseries
+│   ├── spec_decode.py          speculative acceptance recording and comparison
 │   ├── validate.py             bench-vs-sim comparison entry point
 │   ├── plots.py                throughput / running-waiting / latency-CDF helpers
 │   └── logger.py               Rich-based logger + stdio capture
@@ -134,6 +135,8 @@ Run options (also available through `python -m bench run --help`):
 | `--enforce-eager` | off | Disable compilation and CUDA graphs; match this mode to the simulation |
 | `--record-gate-stats` | off | Diagnostic routing observation; requires `--enforce-eager`, and its timings are rejected by validation |
 | `--resolve-only` | off | Boot and save resolved settings, then exit without replay or request/timeseries files |
+| `--speculative-config` | unset | vLLM `speculative_config` as a JSON object, passed unchanged; fixed draft length only. Records acceptance counters, see below |
+| `--per-request-spec-decode-metrics` | `summary` with `--speculative-config` | `none`, `summary` or `detailed` per-request acceptance in `requests.jsonl`; requires `--speculative-config` |
 | `--tick-seconds` | `1.0` | `timeseries.csv` row spacing; the simulator's `--log-interval` |
 | `--num-reqs` | `0` | cap on requests from the dataset, `0` = all |
 | `--log-level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
@@ -147,9 +150,39 @@ can describe only the last engine. Pass the matched value to the simulator as
 
 `bench.sh` is an editable run template, not a passthrough for every CLI flag.
 `DISABLE_CUSTOM_ALL_REDUCE=1` enables the same explicit opt-in; its default is `0`.
-Use the module directly for `--kv-cache-memory-bytes` or `--record-gate-stats`.
+Use the module directly for `--kv-cache-memory-bytes`, `--record-gate-stats`,
+`--speculative-config` or `--per-request-spec-decode-metrics`.
 Its default TP is `2`, while the module defaults to `1`; see the
 [wrapper variable reference](../docs/docs/reference/bench-cli.md#shell-wrappers).
+
+### Speculative decoding
+
+`--speculative-config` takes vLLM's own JSON object, for example
+`'{"method": "eagle3", "model": "<drafter>", "num_speculative_tokens": 3}'`.
+The simulator drafts a fixed N, so whatever varies the draft count per step is
+refused: the n-gram and suffix proposers, which draft only what they match,
+`num_speculative_tokens_per_batch_size` and `enable_adaptive_verification`. The
+request is checked before boot and the resolved config again after it. A run
+that does not speculate gains no speculative engine argument or output field.
+With speculation, the outputs gain vLLM's own `SpecDecodingStats` counters:
+
+- `timeseries.csv` adds `spec_drafts`, `spec_draft_tokens` and
+  `spec_accepted_tokens`, counts summed over the tick and DP engines.
+  `spec_drafts` counts verification steps, one per request per step.
+- `meta.json` adds `speculative_decoding`: the run's totals, per draft position
+  as well, with `acceptance_rate` (accepted over drafted tokens),
+  `mean_acceptance_length` (1 + accepted over verification steps) and
+  `position_acceptance`, accepted per position over verification steps, which
+  is P(accepted >= i) as vLLM's logger reports it and never rises. That last
+  one is the curve `python -m serving --spec-position-acceptance` takes.
+- `requests.jsonl` adds `spec_decode` per request: vLLM's
+  `per_request_spec_decode_metrics` payload (acceptance histogram, mean
+  acceptance length, draft acceptance rate and step counts, plus the per-step
+  arrays under `detailed`). Recording it adds a per-request counter update to
+  vLLM's output loop; `none` turns it off.
+
+`bench` replays greedily at forced output lengths, so the recorded acceptance
+belongs to that replay rather than to the model in general.
 
 ### Compare recorded results: `bench validate`
 
@@ -180,6 +213,13 @@ itself takes all seven directly:
 | `--title` | `vLLM vs LLMServingSim` | plot title suffix |
 | `--log-level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 
+When either the bench run or the simulation ran speculative decoding,
+`summary.txt` gains an acceptance table beneath the latency groups: draft
+length, verification steps, drafted and accepted tokens, acceptance rate, mean
+accept length and per-position acceptance on both sides, with diff%. It warns
+when only one side speculated or the draft lengths differ. Without speculation
+the summary is byte-identical to before.
+
 ## Output schema
 
 One completed bench run and its optional validation output:
@@ -200,6 +240,12 @@ bench/results/<run_id>/
 `--prefix NAME` prepends `NAME_` to each validation filename. `meta.json`
 includes the dataset hash, vLLM version, requested engine kwargs, wall-clock
 start/end, resolved `VllmConfig`, device placement and `kv_cache` fields.
+`hardware` also records the driver version and, per NVML device, its UUID and
+its enforced, default and maximum power limits in watts, so a capped card is
+visible beside the latencies it produced. `max_power_limit_w` is the value a
+profiler `hardware.yaml` calls `power_limit_w`. NVML lists every GPU on the
+host in NVML order, regardless of `CUDA_VISIBLE_DEVICES`, and its UUIDs carry
+the `GPU-` prefix that `device_uuid` omits.
 New runs also retain `execution`: a read-only worker startup observation of the
 effective runner, graph mode and completed capture sizes, qualified by model,
 precision and deployment limits. Unsupported or incomplete observations remain

@@ -34,6 +34,7 @@ from pathlib import Path
 from bench.core import gate_stats as gate_stats_mod
 from bench.core import logger as log
 from bench.core import recorder
+from bench.core import spec_decode
 from bench.core.kv_cache_metadata import ReadyResponseCapture
 from bench.core.execution_metadata import capture_execution
 
@@ -159,6 +160,26 @@ def register_args(p: argparse.ArgumentParser) -> None:
                         "routing controls for MoE. Token IDs and output counts "
                         "are fixed by replay; routing and scheduling need not "
                         "be invariant. Recorded in meta.json.")
+    p.add_argument("--speculative-config", type=spec_decode.parse_speculative_config,
+                   default=None, dest="speculative_config", metavar="JSON",
+                   help="vLLM speculative_config as a JSON object, passed to the "
+                        "engine unchanged, e.g. '{\"method\": \"eagle3\", \"model\": "
+                        "\"<drafter>\", \"num_speculative_tokens\": 3}'. Fixed draft "
+                        "length only: n-gram and suffix proposers, "
+                        "num_speculative_tokens_per_batch_size and "
+                        "enable_adaptive_verification are refused. Records the "
+                        "acceptance counters in timeseries.csv, meta.json and "
+                        "requests.jsonl.")
+    p.add_argument("--per-request-spec-decode-metrics", default=None,
+                   choices=["none", "summary", "detailed"],
+                   dest="per_request_spec_decode_metrics",
+                   help="vLLM's per-request acceptance metrics, written to "
+                        "requests.jsonl under spec_decode. summary (default with "
+                        "--speculative-config) records each request's acceptance "
+                        "histogram; detailed adds the accepted and drafted count "
+                        "of every verify step; none records none. Either of the "
+                        "first two adds a per-request counter update to vLLM's "
+                        "output loop. Requires --speculative-config.")
     p.add_argument("--tick-seconds", type=float, default=1.0,
                    dest="tick_seconds",
                    help="Stat logger downsample interval (timeseries.csv row spacing).")
@@ -259,6 +280,22 @@ async def _drive(args: argparse.Namespace, requests: list[dict], output_dir: Pat
         "end_to_end_control_eligible": False,
     }} if gate_log is not None else {}
 
+    # Speculative decoding is added to the engine arguments only when asked
+    # for, so a run without it boots exactly as before.
+    spec_kwargs = {}
+    if args.speculative_config is not None:
+        try:
+            spec_decode.refuse_variable_draft_count(args.speculative_config)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
+        spec_kwargs = {
+            "speculative_config": dict(args.speculative_config),
+            "per_request_spec_decode_metrics": (
+                args.per_request_spec_decode_metrics or "summary"),
+        }
+    elif args.per_request_spec_decode_metrics not in (None, "none"):
+        raise SystemExit("--per-request-spec-decode-metrics requires --speculative-config")
+
     # Retain the benchmark's separate compute/communication decomposition.
     # Backend selection is independent: these two disabled compiler passes
     # do not enforce NCCL-only or disable model-native fused operations.
@@ -284,8 +321,11 @@ async def _drive(args: argparse.Namespace, requests: list[dict], output_dir: Pat
         enforce_eager=args.enforce_eager,
         worker_extension_cls='bench.core.execution_metadata.ExecutionObserver',
         disable_log_stats=False,
+        **spec_kwargs,
     )
     engine_kwargs_for_meta = _engine_kwargs_for_meta(engine_args)
+    if spec_kwargs:
+        engine_kwargs_for_meta.update(spec_kwargs)
     engine_kwargs_for_meta["compilation_config"] = {"pass_config": {
         name: getattr(compilation_config.pass_config, name)
         for name in ("fuse_allreduce_rms", "fuse_gemm_comms")
@@ -304,6 +344,13 @@ async def _drive(args: argparse.Namespace, requests: list[dict], output_dir: Pat
         if engine is not None:
             engine.shutdown()
         raise
+    # The keys checked above are the request; this is what vLLM resolved,
+    # including a speculative config a checkpoint brings on its own.
+    variable = spec_decode.resolved_variable_draft(engine.vllm_config.speculative_config)
+    if variable is not None:
+        engine.shutdown()
+        raise SystemExit(f"vLLM resolved {variable}, which varies the draft count "
+                         f"per step; bench records a fixed draft length only")
     started_at = datetime.datetime.utcnow().isoformat() + "Z"
     try:
         execution = await capture_execution(engine)
@@ -393,6 +440,7 @@ async def _drive(args: argparse.Namespace, requests: list[dict], output_dir: Pat
         resolved_config=resolved_config,
         execution=execution,
         **observation_meta,
+        **_speculative_meta(BenchStatLogger.speculative_summary()),
     )
     recorder.write_requests(output_dir, records)
     header, rows = BenchStatLogger.downsample_to_csv_rows(args.tick_seconds)
@@ -449,20 +497,35 @@ async def _submit_all(engine, requests: list[dict], SamplingParams, TokensPrompt
             request_id = f"bench-{idx}"
 
             last_metrics = None
+            spec_metrics = None
             async for output in engine.generate(prompt, sp, request_id):
                 if output.metrics is not None:
                     last_metrics = output.metrics
+                # Present on the finished output only, and only when the
+                # engine was asked for per-request speculative metrics.
+                spec_metrics = spec_decode.completion_spec_metrics(output) or spec_metrics
 
             completed[0] += 1
             bar.advance()
-            return _record_from_metrics(idx, req, last_metrics)
+            return _record_from_metrics(idx, req, last_metrics, spec_metrics)
 
         tasks = [asyncio.create_task(_one(i, r)) for i, r in enumerate(requests)]
         return await asyncio.gather(*tasks)
 
 
-def _record_from_metrics(idx: int, req: dict, metrics) -> dict:
-    """Project ``RequestStateStats`` onto our flat per-request schema."""
+def _record_from_metrics(idx: int, req: dict, metrics, spec_metrics: dict | None = None) -> dict:
+    """Project ``RequestStateStats`` onto our flat per-request schema.
+
+    ``spec_decode`` is added only for a speculative run, so a record without
+    speculation keeps its existing keys.
+    """
+    record = _timing_record(idx, req, metrics)
+    if spec_metrics is not None:
+        record["spec_decode"] = spec_metrics
+    return record
+
+
+def _timing_record(idx: int, req: dict, metrics) -> dict:
     if metrics is None:
         return {
             "request_id": f"bench-{idx}",
@@ -659,6 +722,67 @@ def _kv_cache_facts(engine, ready_capture=None) -> dict:
     return facts
 
 
+def _speculative_meta(summary: dict | None) -> dict:
+    """``meta.json``'s ``speculative_decoding`` entry, absent without speculation."""
+    return {"speculative_decoding": summary} if summary is not None else {}
+
+
+def _nvml_facts() -> dict:
+    """Driver version and per-device power limits from NVML.
+
+    The enforced limit is what the card was actually held to, beside its
+    default and its maximum, since a capped card is a different machine for a
+    latency comparison. ``max_power_limit_w`` is the value the profiler's
+    ``hardware.yaml`` calls ``power_limit_w`` (nvidia-smi ``power.max_limit``).
+    NVML lists every GPU on the host in NVML order, regardless of
+    ``CUDA_VISIBLE_DEVICES``; its UUIDs carry a ``GPU-`` prefix that
+    ``device_uuid`` lacks. Uses vLLM's own NVML binding when present.
+    """
+    try:
+        try:
+            from vllm.utils.import_utils import import_pynvml
+            pynvml = import_pynvml()
+        except ImportError:
+            import pynvml
+    except ImportError as exc:
+        return {"nvml_error": f"{type(exc).__name__}: {exc}"}
+
+    def _text(value):
+        return value.decode() if isinstance(value, bytes) else str(value)
+
+    try:
+        pynvml.nvmlInit()
+    except Exception as exc:
+        return {"nvml_error": f"{type(exc).__name__}: {exc}"}
+    try:
+        facts: dict = {"driver_version": _text(pynvml.nvmlSystemGetDriverVersion())}
+        devices = []
+        for index in range(pynvml.nvmlDeviceGetCount()):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+            device = {"index": index, "uuid": _text(pynvml.nvmlDeviceGetUUID(handle))}
+            for key, query in (
+                    ("enforced_power_limit_w", pynvml.nvmlDeviceGetEnforcedPowerLimit),
+                    ("default_power_limit_w",
+                     pynvml.nvmlDeviceGetPowerManagementDefaultLimit),
+                    ("max_power_limit_w",
+                     lambda h: pynvml.nvmlDeviceGetPowerManagementLimitConstraints(h)[1])):
+                try:
+                    device[key] = query(handle) / 1000.0     # NVML reports mW
+                except Exception as exc:
+                    device[key] = None
+                    device[f"{key}_error"] = f"{type(exc).__name__}: {exc}"
+            devices.append(device)
+        facts["nvml_devices"] = devices
+        return facts
+    except Exception as exc:
+        return {"nvml_error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+
+
 def _hardware_facts() -> dict:
     """Which accelerator this ran on, for matching against profiler/perf/<hw>/."""
     facts = {"cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES")}
@@ -688,6 +812,7 @@ def _hardware_facts() -> dict:
             facts["device_uuid"] = str(getattr(props, "uuid", "unknown"))
     except Exception as exc:
         facts["error"] = f"{type(exc).__name__}: {exc}"
+    facts.update(_nvml_facts())
     return facts
 
 

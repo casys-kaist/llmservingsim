@@ -31,6 +31,17 @@ rate to that formula under-predicts the published accept length by 25-30%
 is front-loaded rather than i.i.d. The check that settles it: Qwen's published
 per-position decline of 95% at p1 to 60% at p5 averages 0.775 read as
 marginals against a published 0.779, and 0.621 read as conditionals.
+
+Per-position curves
+-------------------
+vLLM accepts a **prefix** of the draft: a step that accepts k tokens accepted
+positions 1..k, and its counters record it that way
+(``vllm/v1/spec_decode/metrics.py``, ``SpecDecodingStats.observe_draft``). So
+the per-position marginals m_i fix the whole distribution of the accepted
+count, ``P(accepted >= i) = m_i``, and a valid curve is nonincreasing. That is
+the rule vLLM applies to its own ``synthetic_acceptance_rates``
+(``vllm/config/speculative.py``): N entries, each in [0, 1], never rising.
+``DECAY`` samples that distribution with one uniform draw per step.
 """
 
 import json
@@ -65,6 +76,83 @@ def published_defaults(model_name):
     return _TABLE_CACHE[path].get(model_name)
 
 
+def check_position_acceptance(curve, num_speculative_tokens=None,
+                              source="per-position acceptance"):
+    """``curve`` as a list of floats, or ValueError.
+
+    A per-position curve holds the marginal P(accepted >= i) for i = 1..N, so
+    it must be nonincreasing with every entry in [0, 1], and hold N entries
+    when N is known. The same rule vLLM applies to
+    ``synthetic_acceptance_rates``. Nothing is clipped: a curve that breaks it
+    describes no prefix acceptance, and silently repairing it would simulate a
+    different one.
+    """
+    if isinstance(curve, (str, bytes)) or not hasattr(curve, "__iter__"):
+        raise ValueError(f"{source} must be a list of rates; got {curve!r}")
+    values = []
+    for p in curve:
+        if isinstance(p, bool) or not isinstance(p, (int, float)):
+            raise ValueError(f"{source} entries must be numbers; got {curve!r}")
+        values.append(float(p))
+    if not values:
+        raise ValueError(f"{source} must hold at least one rate")
+    if num_speculative_tokens is not None and len(values) != num_speculative_tokens:
+        raise ValueError(
+            f"{source} has {len(values)} entries but num_speculative_tokens is "
+            f"{num_speculative_tokens}; it needs one rate per draft position")
+    if any(not 0.0 <= p <= 1.0 for p in values):
+        raise ValueError(f"{source} entries must be in [0, 1]; got {values}")
+    if any(later > earlier for earlier, later in zip(values, values[1:])):
+        raise ValueError(
+            f"{source} must be nonincreasing, since position i is accepted only "
+            f"when every earlier position was; got {values}")
+    return values
+
+
+def resolve_acceptance_inputs(num_speculative_tokens, acceptance_rate,
+                              position_acceptance, published):
+    """Combine explicit acceptance inputs with a model's published entry.
+
+    Returns ``(N, rate, curve, source)``. ``N`` is 0 when speculative decoding
+    is off, ``rate`` is None when nothing supplies one, ``curve`` is the
+    per-position list to use or None (a ramp is then derived from ``rate``),
+    and ``source`` names where the rates came from: ``per-position``,
+    ``explicit`` or ``published``.
+
+    Explicit inputs win over published ones, most specific first: an explicit
+    per-position curve, then an explicit aggregate rate, then the published
+    curve with its aggregate. An explicit aggregate rate therefore replaces the
+    published curve too, rather than being paired with a curve whose mean is a
+    different rate. A curve sets N when N is not given (0 or -1), and its mean
+    becomes the aggregate rate, replacing any aggregate given beside it; the
+    caller warns when the two disagree (``curve_overrides_rate``).
+    """
+    n = num_speculative_tokens
+    rate = acceptance_rate
+    published = published or {}
+    if position_acceptance is not None:
+        curve = check_position_acceptance(position_acceptance)
+        if n in (None, 0, -1):
+            n = len(curve)
+        check_position_acceptance(curve, n)
+        return n, sum(curve) / len(curve), curve, "per-position"
+    if not n and rate is None:
+        return 0, None, None, None
+    if n in (None, 0, -1):
+        n = published.get("num_speculative_tokens", 0)
+    if rate is not None:
+        return n, rate, None, "explicit"
+    return (n, published.get("acceptance_rate"),
+            published.get("position_acceptance"), "published")
+
+
+def curve_overrides_rate(acceptance_rate, curve):
+    """True when an explicit aggregate rate given beside a curve is replaced
+    by a materially different curve mean."""
+    return (acceptance_rate is not None and curve is not None
+            and abs(float(acceptance_rate) - sum(curve) / len(curve)) > 1e-3)
+
+
 class AcceptanceModel:
     """How many of a step's N draft tokens the target model accepts.
 
@@ -72,14 +160,18 @@ class AcceptanceModel:
         FIXED   (default) -- every position accepted with the same marginal
                              probability, so E[accepted] = rate * N and the
                              mean accept length is exactly the published one.
-        DECAY             -- per-position marginals from the model's published
-                             ``position_acceptance`` curve, or a linear ramp
-                             with the same mean when only the aggregate is
-                             published. Acceptance really does fall with draft
-                             position (Qwen3.5-27B: 95% at p1 to 60% at p5),
-                             so this changes the *variance* and the tail of the
-                             accepted-length distribution while keeping its
-                             mean.
+        DECAY             -- the accepted count is a prefix of the draft, as in
+                             vLLM: one uniform draw u per step, and position i
+                             is accepted while u < m_i, so P(accepted >= i) =
+                             m_i. The curve m is an explicit per-position
+                             input, else the model's published
+                             ``position_acceptance``, else a linear ramp with
+                             the same mean as the aggregate rate. Acceptance
+                             really does fall with draft position
+                             (Qwen3.5-27B: 95% at p1 to 60% at p5). On that
+                             published curve the prefix draw has variance 2.61
+                             against FIXED's 0.86 at nearly the same mean, so
+                             the spread differs, not only the shape.
         CUSTOM            -- user-supplied ``_custom_acceptance_function``.
 
     Acceptance is drawn, not averaged, because a scheduler is not a mean: two
@@ -125,15 +217,17 @@ class AcceptanceModel:
     def _resolve_positions(self, published):
         """Per-position marginals of length N, summing to ``rate * N``.
 
-        A published curve is used as given when it is the right length. With
-        only an aggregate, the curve is a linear ramp whose mean is that
-        aggregate -- the shape the one source that publishes both reports,
-        rather than a flat line, since a flat line is what FIXED already is.
+        A supplied curve is used as given when it is the right length, and
+        refused when it is not a valid prefix curve (see
+        ``check_position_acceptance``). With only an aggregate, the curve is a
+        linear ramp whose mean is that aggregate -- the shape the one source
+        that publishes both reports, rather than a flat line, since a flat line
+        is what FIXED already is.
         """
         if self.N == 0:
             return []
         if published and len(published) == self.N:
-            return [min(max(float(p), 0.0), 1.0) for p in published]
+            return check_position_acceptance(published, self.N)
         if self.N == 1:
             return [self.rate]
         # Ramp from rate + spread to rate - spread, clipped to [0, 1]. The
@@ -154,13 +248,18 @@ class AcceptanceModel:
         return accepted
 
     def _decay(self, n_draft):
-        """Each position accepted at its own published marginal rate."""
+        """A prefix of the draft: one uniform draw, P(accepted >= i) = m_i.
+
+        The curve is nonincreasing, so the positions with u < m_i are exactly
+        the first k of them. A step that drafts fewer than N tokens (its draft
+        clamped to the step's token budget) uses the first ``n_draft`` rates.
+        """
+        u = self.rnd.random()
         accepted = 0
-        for i in range(n_draft):
-            p = self.position_acceptance[i] if i < len(self.position_acceptance) \
-                else self.rate
-            if self.rnd.random() < p:
-                accepted += 1
+        for p in self.position_acceptance[:n_draft]:
+            if u >= p:
+                break
+            accepted += 1
         return accepted
 
     def _custom_acceptance_function(self, n_draft):
@@ -219,6 +318,64 @@ def _selftest():
     assert AcceptanceModel(5, q["acceptance_rate"],
                            q["position_acceptance"]).position_acceptance \
         == q["position_acceptance"]
+
+    # DECAY draws a prefix: P(accepted >= i) is the curve, not a product
+    curve = q["position_acceptance"]
+    decay = AcceptanceModel(5, q["acceptance_rate"], curve, policy="DECAY")
+    draws = [decay.draw(5) for _ in range(200000)]
+    for i, m in enumerate(curve, start=1):
+        share = sum(d >= i for d in draws) / len(draws)
+        assert abs(share - m) < 0.005, (i, share, m)
+    assert abs(statistics.mean(draws) - sum(curve)) < 0.02
+    # a clamped step uses the first n_draft rates
+    assert all(0 <= decay.draw(2) <= 2 for _ in range(1000))
+    short = [decay.draw(2) for _ in range(100000)]
+    assert abs(sum(d >= 2 for d in short) / len(short) - curve[1]) < 0.01
+
+    # curve validation, vLLM's rule for synthetic_acceptance_rates
+    for bad, n in (([0.5, 0.6], 2), ([1.2, 0.5], 2), ([-0.1], 1),
+                   ([0.9, 0.8], 3), ([], None), ("0.9", None), ([True], 1)):
+        try:
+            check_position_acceptance(bad, n)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted invalid curve {bad!r} for N={n}")
+    assert check_position_acceptance([0.9, 0.9, 0.5], 3) == [0.9, 0.9, 0.5]
+    try:
+        AcceptanceModel(2, 0.5, [0.4, 0.6], policy="DECAY")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a rising published curve was accepted")
+
+    # input precedence: per-position > explicit rate > published curve
+    pub = {"num_speculative_tokens": 5, "acceptance_rate": 0.779,
+           "position_acceptance": curve}
+    assert resolve_acceptance_inputs(0, None, None, pub) == (0, None, None, None)
+    assert resolve_acceptance_inputs(-1, None, None, pub) == (
+        5, 0.779, curve, "published")
+    assert resolve_acceptance_inputs(5, 0.5, None, pub) == (5, 0.5, None, "explicit")
+    n, r, c, src = resolve_acceptance_inputs(0, None, [0.8, 0.6, 0.4], pub)
+    assert (n, c, src) == (3, [0.8, 0.6, 0.4], "per-position")
+    assert abs(r - 0.6) < 1e-12
+    assert resolve_acceptance_inputs(-1, None, [0.8, 0.6, 0.4], pub)[0] == 3
+    # the curve takes precedence over an aggregate rate given beside it
+    n, r, c, src = resolve_acceptance_inputs(3, 0.5, [0.8, 0.6, 0.4], pub)
+    assert (n, c, src) == (3, [0.8, 0.6, 0.4], "per-position") and abs(r - 0.6) < 1e-12
+    assert curve_overrides_rate(0.5, [0.8, 0.6, 0.4])
+    assert not curve_overrides_rate(0.6, [0.8, 0.6, 0.4])
+    assert not curve_overrides_rate(None, [0.8, 0.6, 0.4])
+    try:
+        resolve_acceptance_inputs(4, None, [0.8, 0.6, 0.4], pub)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("accepted a curve shorter than N")
+    # an explicit rate replaces the published curve: DECAY ramps from it
+    n, r, c, _ = resolve_acceptance_inputs(5, 0.5, None, pub)
+    ramp = AcceptanceModel(n, r, c, policy="DECAY")
+    assert abs(ramp.mean_accept_length() - 3.5) < 1e-9
+    assert ramp.position_acceptance != curve
     print("spec_decode self-test: all checks passed")
 
 

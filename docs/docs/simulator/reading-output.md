@@ -303,6 +303,11 @@ Notes on individual fields:
   and `Total prefix hit ratio` covers both tiers.
 - The per-**Instance** blocks report **milliseconds**, unlike the CSV,
   which is nanoseconds throughout.
+- With speculative decoding on, each **Instance** block ends with a
+  **Speculative Decoding** section: draft length, verification steps, drafted
+  and accepted tokens, acceptance rate, mean accept length, and per draft
+  position how many verification steps accepted it of how many drafted it. See
+  [speculative decoding](/docs/examples/advanced/speculative-decoding#per-position-acceptance).
 
 :::note[TTFT is not measured the way vLLM measures it]
 The simulator stops the clock when the first token's *computation*

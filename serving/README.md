@@ -104,7 +104,7 @@ from one list is visible against the other.
 | **memory** | `--block-size`, `--npu-memory-utilization` |
 | **prefix caching** | `--enable-prefix-caching`; run-wide: `--enable-prefix-sharing`, `--prefix-storage` |
 | **routing** *(run-wide)* | `--request-routing-policy`, `--expert-routing-policy`, `--gate-stats` |
-| **speculative decoding** | `--num-speculative-tokens`, `--spec-acceptance-rate`, `--spec-acceptance-policy` |
+| **speculative decoding** | `--num-speculative-tokens`, `--spec-acceptance-rate`, `--spec-position-acceptance`, `--spec-acceptance-policy` |
 | **offloading** | `--enable-attn-offloading`, `--enable-sub-batch-interleaving`, `--enable-local-offloading` |
 | **trace / graph** | `--enable-block-copy`; run-wide: `--save-trace-text`, `--keep-inputs` |
 | **backend** *(run-wide)* | `--network-backend` |
@@ -372,6 +372,14 @@ reproduces all nine published (rate, length) pairs to within 0.01 tokens.
 `DECAY`, `CUSTOM`). A model with no published figure gets no default — the four
 modern families range from 0.39 to 0.78, so there is nothing defensible to
 guess.
+
+`DECAY` draws a prefix of the draft, as vLLM accepts one: one uniform draw per
+step, so P(accepted >= i) is the per-position curve. A measured curve, such as
+the `position_acceptance` a `bench run --speculative-config` records, is passed
+with `--spec-position-acceptance`; it must be nonincreasing and takes
+precedence over an aggregate rate, which in turn replaces the published curve.
+A speculative run ends each instance's results with its realized acceptance,
+in the counters vLLM reports.
 
 Model-owned MTP drafter passes are charged from catalog bindings and profile
 tables; missing required data is an error. Separate-model or n-gram drafting

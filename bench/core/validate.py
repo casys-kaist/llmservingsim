@@ -26,6 +26,7 @@ from pathlib import Path
 
 from bench.core import logger as log
 from bench.core import plots
+from bench.core import spec_decode
 
 
 def register_args(p: argparse.ArgumentParser) -> None:
@@ -115,9 +116,30 @@ def run(args: argparse.Namespace) -> int:
             output_dir, args.prefix,
             bench_ttft, sim_ttft, bench_tpot, sim_tpot, bench_lat, sim_lat,
         )
+        _append_acceptance(summary_path, bench_dir, Path(args.sim_log))
     log.success("Wrote plots + summary -> %s", output_dir)
     log.info("Summary: %s", summary_path)
     return 0
+
+
+def _append_acceptance(summary_path: Path, bench_dir: Path, sim_log: Path) -> None:
+    """Add measured and simulated speculative acceptance under the latency table.
+
+    Nothing is written when neither side ran speculative decoding, so a
+    non-speculative summary stays byte-identical.
+    """
+    meta_path = bench_dir / "meta.json"
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else None
+    lines, warnings = spec_decode.acceptance_lines(
+        spec_decode.bench_acceptance(meta), spec_decode.sim_acceptance(sim_log))
+    if not lines:
+        return
+    with summary_path.open("a") as f:
+        # A blank line separates it from the latency groups, as they are
+        # separated from each other.
+        f.write("\n" + "\n".join(lines))
+    for warning in warnings:
+        log.warning(warning)
 
 
 # ---------------------------------------------------------------------------

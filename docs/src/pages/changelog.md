@@ -10,6 +10,32 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) co
 
 ### Added
 
+- Record the driver version and each GPU's enforced, default and maximum power
+  limit in a bench run's `meta.json` `hardware` facts, read from NVML, so a
+  power-capped card is visible beside the latencies it produced. See the
+  [bench CLI](https://llmservingsim.ai/docs/reference/bench-cli).
+- Record speculative decoding with `bench run --speculative-config`: vLLM's
+  acceptance counters per tick in `timeseries.csv`, per run and draft position
+  in `meta.json`, and per request in `requests.jsonl`
+  (`--per-request-spec-decode-metrics`). Only a fixed draft length is accepted:
+  n-gram and suffix proposers and variable-N configs are refused.
+  `bench validate` adds measured and simulated acceptance to `summary.txt`
+  beneath the latency table and warns when the draft lengths differ. Runs that
+  do not speculate gain no speculative engine argument or output field, and
+  their summaries are byte-identical. See the
+  [bench CLI](https://llmservingsim.ai/docs/reference/bench-cli#speculative-decoding)
+  ([#85](https://github.com/casys-kaist/LLMServingSim/issues/85)).
+- End each instance's results with its realized speculative acceptance when
+  speculative decoding is configured: verification steps, drafted and accepted
+  tokens, and accepted counts per draft position. Other output is unchanged.
+  See [reading the output](https://llmservingsim.ai/docs/simulator/reading-output).
+- Accept a measured per-position acceptance curve for speculative decoding with
+  `--spec-position-acceptance` or the per-instance `spec_position_acceptance`.
+  The curve must be nonincreasing within [0, 1] and sets N when N is not
+  given. It takes precedence over an aggregate rate, which is replaced by the
+  curve's mean. See
+  [speculative decoding](https://llmservingsim.ai/docs/examples/advanced/speculative-decoding#per-position-acceptance)
+  ([#85](https://github.com/casys-kaist/LLMServingSim/issues/85)).
 - Introduce [Simthesizer](https://simthesizer.ai/), a sibling project for
   coding-agent-driven simulator development, on the website's landing page.
   An equal-width split below the LLMServingSim hero presents LLMServingSim 2.0
@@ -23,6 +49,18 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) co
   cache, ASTRA-Sim networking, heterogeneous and disaggregated systems, model
   architectures and workloads, and the research section lists all three
   LLMServingSim publications.
+
+### Changed
+
+- Draw `DECAY` speculative acceptance as a prefix of the draft, the way vLLM
+  accepts tokens: one uniform draw per step, so P(accepted >= i) follows the
+  per-position curve. A rising or out-of-range curve is refused instead of
+  clipped. `FIXED` and `CUSTOM` are unchanged, as are recorded clocks, which
+  use `FIXED`. See
+  [speculative decoding](https://llmservingsim.ai/docs/examples/advanced/speculative-decoding#per-position-acceptance).
+- Let an explicit `--spec-acceptance-rate` replace a model's published
+  per-position curve instead of being paired with it, so `DECAY` ramps around
+  the given rate.
 
 ### Fixed
 
