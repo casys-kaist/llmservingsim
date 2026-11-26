@@ -89,6 +89,14 @@ def materialize_prefix(config, overrides):
                 index for index in inner["linear_attn_config"][name] if index <= depth]
     if isinstance(inner.get("layer_types"), list):
         inner["layer_types"] = inner["layer_types"][:depth]
+    mlp_layer_types = inner.get("mlp_layer_types")
+    if isinstance(mlp_layer_types, list):
+        if len(mlp_layer_types) < depth:
+            raise ValueError(
+                f"mlp_layer_types has {len(mlp_layer_types)} entries "
+                f"but the profiling depth is {depth}"
+            )
+        inner["mlp_layer_types"] = mlp_layer_types[:depth]
     return result
 
 
