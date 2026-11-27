@@ -301,7 +301,7 @@ def _materialize_config(
     # already validated prefix schedule, never the original full-depth list.
     native_text = written.get("text_config", written)
     overrides = copy.deepcopy(overrides)
-    for key in ("linear_attn_config", "layer_types"):
+    for key in ("linear_attn_config", "layer_types", "mlp_layer_types"):
         if key in overrides and key in native_text:
             overrides[key] = copy.deepcopy(native_text[key])
     kwargs["hf_overrides"] = overrides
